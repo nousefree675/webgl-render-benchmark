@@ -1,0 +1,65 @@
+name: render-benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds of video to render at 24fps (1.25 = 30 frames)'
+        required: true
+        default: '1.25'
+      quality:
+        description: 'Sub-frames per frame (--n): 1 draft, 4 preview'
+        required: true
+        default: '1'
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          echo "cores: $(nproc)"
+          free -h | head -2
+          node --version
+          google-chrome --version
+          ffmpeg -version | head -1
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Render benchmark slice
+        run: |
+          mkdir -p out
+          export CHROME_PATH=$(which google-chrome)
+          start=$(date +%s)
+          node render.mjs --video --from=0 --to=${{ inputs.seconds }} --fps=24 --n=${{ inputs.quality }} --out=out/bench_n${{ inputs.quality }}.mp4 2>&1 | tee bench_n${{ inputs.quality }}.log
+          end=$(date +%s)
+          echo "wall_seconds=$((end-start))" | tee -a bench_n${{ inputs.quality }}.log
+
+      - name: Timing summary
+        run: |
+          FRAMES=$(python3 -c "print(int(float('${{ inputs.seconds }}')*24))")
+          WALL=$(grep -oP 'wall_seconds=\K[0-9]+' bench_n${{ inputs.quality }}.log || echo 0)
+          GPU=$(grep -m1 -oP 'GPU: \K.*' bench_n${{ inputs.quality }}.log)
+          if [ "$WALL" -gt 0 ]; then
+            {
+              echo "# Synthetic scene benchmark (n=${{ inputs.quality }}, ${{ inputs.seconds }}s @24fps)"
+              echo "- Renderer: $GPU"
+              echo "- Frames: $FRAMES, wall: ${WALL}s, per-frame: $(python3 -c "print(round($WALL/max($FRAMES,1),3))")s"
+              echo "- Projected 1-min video (1440 frames, one job): $(python3 -c "print(round($WALL/max($FRAMES,1)*1440/60,1))") minutes"
+              echo "- Runner cores: $(nproc)"
+              echo "- NOTE: synthetic procedural scene; real projects with heavy models render slower per frame."
+            } | tee -a bench_n${{ inputs.quality }}.log >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-n${{ inputs.quality }}
+          path: |
+            out/bench_n${{ inputs.quality }}.mp4
+            bench_n${{ inputs.quality }}.log
+          retention-days: 7
