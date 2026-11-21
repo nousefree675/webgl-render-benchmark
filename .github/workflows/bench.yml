@@ -27,10 +27,14 @@ jobs:
           ffmpeg -version | head -1
 
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          npm ci --no-audit --no-fund
 
       - name: Render benchmark slice
         run: |
+          set -o pipefail
           mkdir -p out
           export CHROME_PATH=$(which google-chrome)
           start=$(date +%s)
@@ -42,6 +46,8 @@ jobs:
         run: |
           FRAMES=$(python3 -c "print(int(float('${{ inputs.seconds }}')*24))")
           WALL=$(grep -oP 'wall_seconds=\K[0-9]+' bench_n${{ inputs.quality }}.log || echo 0)
+          RENDERLINE=$(grep -m1 'video ->' bench_n${{ inputs.quality }}.log || true)
+          if [ -z "$RENDERLINE" ]; then echo 'RENDER FAILED - no video line' >> $GITHUB_STEP_SUMMARY; exit 1; fi
           GPU=$(grep -m1 -oP 'GPU: \K.*' bench_n${{ inputs.quality }}.log)
           if [ "$WALL" -gt 0 ]; then
             {
